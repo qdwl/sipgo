@@ -17,7 +17,8 @@ type ClientTx struct {
 	timer_d      *time.Timer
 	timer_m      *time.Timer
 
-	closeOnce sync.Once
+	onRetransmission FnTxResponse
+	closeOnce        sync.Once
 }
 
 func NewClientTx(key string, origin *Request, conn Connection, logger *slog.Logger) *ClientTx {
@@ -88,6 +89,29 @@ func (tx *ClientTx) Responses() <-chan *Response {
 	return tx.responses
 }
 
+func (tx *ClientTx) OnRetransmission(f FnTxResponse) bool {
+	tx.mu.Lock()
+	if tx.closed {
+		tx.mu.Unlock()
+		return false
+	}
+	tx.registerOnResponse(f)
+	tx.mu.Unlock()
+	return true
+}
+
+func (tx *ClientTx) registerOnResponse(f FnTxResponse) {
+	if tx.onRetransmission != nil {
+		prev := tx.onRetransmission
+		tx.onRetransmission = func(r *Response) {
+			prev(r)
+			f(r)
+		}
+		return
+	}
+	tx.onRetransmission = f
+}
+
 // Cancel cancels client transaction by sending CANCEL request
 // func (tx *ClientTx) Cancel() error {
 // 	tx.spinFsm(client_input_cancel)
@@ -130,6 +154,10 @@ func (tx *ClientTx) Receive(res *Response) {
 	// }
 
 	tx.spinFsmWithResponse(input, res)
+}
+
+func (tx *ClientTx) Connection() Connection {
+	return tx.conn
 }
 
 // func (tx *ClientTx) cancel() {
